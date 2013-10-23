@@ -1,41 +1,23 @@
-Emiller's Руководство по разработке модуля Nginx
-================================================
+Руководство разработчика модулей Nginx
+======================================
 
-By [Evan Miller](/)
+Оригинальный пост написал Evan Miller.
 
-Первая публикация: 28 Апреля, 2007 (Последняя редакция: 16 Января, 2013 – [changes](#changes))
+Начало статьи о том, чтоб Бэтмен - герой комикса, ничто без своего пояса принадлежностей.
+Вместо пояса принадлежностей, у сервера Nginx есть модули расширяющих его возможности.
+Когда Nginx должен применить архивирование GZIP или перекодировать ответ (response), он передает эту работу модулю. Когда Nginx блокирует доступ к ресурсам на основе IP-адреса или HTTP-аутентификации учетных данных, это делает вместо него модуль.
+Когда Nginx общается с Memcache или FastCGI серверами, это тоже делает модуль.
 
-Bruce Wayne: *What's that?*
- Lucius Fox: *The Tumbler? Oh… you wouldn't be interested in that.*
-
-Чтобы полностью оценить Nginx, it helps to understand Batman, the comic book character.
-
-Batman is fast. Nginx is fast. Batman fights crime. Nginx fights wasted CPU cycles and memory leaks. Batman performs well under pressure. Nginx, for its part, excels under heavy server loads.
-
-But Batman would be almost nothing without the **Batman utility belt**.
-
-![](images/utility_belt.jpg)
-
-**Figure 1**: The Batman utility belt, gripping Christian Bale's love handles.
-
-At any given time, Batman's utility belt might contain a lock pick, several batarangs, bat-cuffs, a bat-tracer, bat-darts, night vision goggles, thermite grenades, smoke pellets, a flashlight, a kryptonite ring, an acetylene torch, or an Apple iPhone. When Batman needs to tranquilize, blind, deafen, stun, track, stop, smoke out, or text-message the enemy, you better believe he's reaching down for his bat-belt. The belt is so crucial to Batman's operations that if Batman had to choose between wearing pants and wearing the utility belt, he would definitely choose the belt. In fact, he \*did\* choose the utility belt, and that's why Batman wears rubber tights instead of pants (Fig. 1).
-
-Вместо пояса принадлежностей, Nginx имеет модули расширения. Когда Nginx должен применить GZIP или перекодировать ответ (response), он передает эту работу модулю. Когда Nginx блокирует доступ к ресурсам на основе IP-адреса или HTTP-аутентификации учетных данных, это делает вместо него модуль. Когда Nginx общается с Memcache или FastCGI серверами, это тоже делает модуль.
-
-Batman's utility belt holds a lot of doo-hickeys, but occasionally Batman needs a new tool. Maybe there's a new enemy against whom bat-cuffs and batarangs are ineffectual. Or Batman needs a new ability, like being able to breathe underwater. That's when Batman rings up **Lucius Fox** to engineer the appropriate bat-gadget.
-
-![](images/lucius.jpg)
-
-**Figure 2**: Bruce Wayne (née Batman) consults with his engineer, Lucius Fox
-
-Целью данного руководства является научить Вас деталям модуля Nginx. Когда вы закончите с этим руководством, вы будете в состоянии проектировать и производить высококачественные модули, которые позволяют Nginx делать вещи, которые он не мог раньше. Модульная система Nginx имеет много мельчайших нюансов, так что вы, вероятно, захотите часто возвращаться к этому документу. Я постарался сделать концепцию как можно более понятной, но скажу прямо - написание модулей Nginx тяжелая работа.
+Цель данного руководства - понять, что такое модуль Nginx и научиться его готовить.
+Модульная система Nginx имеет много мельчайших нюансов, так что вы, вероятно, захотите частенько возвращаться к этому документу.
+Я постарался описать концепцию как можно более понятной, но скажу прямо - написание модулей Nginx тяжелая работа.
 
 Но кто сказал, что это будет легко?
 
 Содержание
 -----------------
 
-[Предпосылки](#prerequisites)
+[Введение](#prerequisites)
 
 [High-Level высокоуровневая передача полномочий модулю Nginx's](#overview)
 
@@ -93,14 +75,104 @@ Batman's utility belt holds a lot of doo-hickeys, but occasionally Batman needs 
 
 [Ссылки на источник](#code)
 
-0. Предпосылки
---------------
+0. Введение
+-----------
 
-Вы должны хорошо знять C. Не просто "C-syntax"; Вы должны ориентироваться в структуре и не пугадться от ссылок на указатели и функции, и должы быть осводомлениы о работе пре-процессора preprocessor. Если Вы хотите освежить знания, Нет ничего лучше чем [K&R](http://en.wikipedia.org/wiki/The_C_Programming_Language_(book)).
+Вы должны хорошо знять C. 
+Не просто "C-syntax"; Вы должны ориентироваться в структуре и не пугадться от ссылок на указатели и функции, и должы быть осводомлениы о работе пре-процессора preprocessor.
+Если Вы хотите освежить свои знания, нет ничего лучше чем книга [K&R](http://en.wikipedia.org/wiki/The_C_Programming_Language_(book)). (Мнение автора статья)
 
-Основы работы HTTP будут полезны. В конце-концов мы работаем на web сервере.
+Знания принципов работы HTTP протокола, также будут полезны. В конце-концов речь о web сервере.
 
-Вам также следует знать конфигурационные файлы Nginx. Если Вы не знаете, то в кратце существует четыре контекста *contexts* (называемые: основа *main*, сервер *server*, вышестоящий пункт назначения *upstream*, и расположение *location*) которые могут содержать директивы с один и более аргументом. Directives in the main context apply to everything; directives in the server context apply to a particular host/port; directives in the upstream context refer to a set of backend servers; and directives in a location context apply only to matching web locations (e.g., "/", "/images", etc.) A location context inherits from the surrounding server context, and a server context inherits from the main context. The upstream context neither inherits nor imparts its properties; it has its own special directives that don't really apply elsewhere. I'll refer to these four contexts quite a bit, so… don't forget them.
+Вам также следует знать конфигурационные файлы с которыми работает Nginx.
+Содержимое конфигурационного файла можно разделить по содержанию в них контекста *contexts*
+- основной блок *main* - здесь указываются параметры рабобты самого nginx
+ - блок *events* содержит директивы описывающих сколько например серверу nginx разрешено обрабатывать одновременно запросов одним воркером worker
+ - существуют модули *mail*
+ - основной модуль *http* - внутри которого идёт описание настроек при работе с HTTP протоколом
+  - блок сервера *server*
+   - расположение *location*
+  - балансировщик нагрузки, модуль *upstream* (как правило другой какой-то сервер или группа серверов)
+Каждый из которых может содержать *директивы* с одним и более аргументами.
+Directives in the main context apply to everything; directives in the server context apply to a particular host/port; directives in the upstream context refer to a set of backend servers; and directives in a location context apply only to matching web locations (e.g., "/", "/images", etc.) A location context inherits from the surrounding server context, and a server context inherits from the main context. The upstream context neither inherits nor imparts its properties; it has its own special directives that don't really apply elsewhere. I'll refer to these four contexts quite a bit, so… don't forget them.
+Приведу здесь пример конфигурационного файла ```nginx.conf```
+
+```nginx
+# основа *main*
+user       www www;  ## пользователь и группа от кого запускать сервер, по умолчанию: nobody
+worker_processes  5;  ## сколько рабочих процессов запускать по умолчанию: 1
+error_log  logs/error.log; ## лог ошибок
+pid        logs/nginx.pid; ## pid - индентификационный файл процесса  nginx 
+worker_rlimit_nofile 8192; ## 
+
+
+events {
+  worker_connections  4096;  ## Default: 1024
+}
+ 
+http {
+  # здесь происходит подключение внешних конфигурационных файлов с помощью директивы include
+  include    conf/mime.types;          # файл с описанием MIME типов файлов или потоков, с которыми возможно придется иметь дело
+  include    /etc/nginx/proxy.conf;    # в этом файле должно быть расположены директивы настройки работы модуля *proxy*
+  include    /etc/nginx/fastcgi.conf;  # тоже самое для модуля *fastcgi*
+  
+  # директива index - это указание какой файл надо открывать по умолчание
+  # описаные файлы и их последовательный вызов в случае не нахождения первого
+  index    index.html index.htm index.php;
+ 
+  # директива default_type указывает тип данных по умолчанию для отдаваемых данных 
+  default_type application/octet-stream;
+
+  # директива описание формата хранения логов
+  log_format   main '$remote_addr - $remote_user [$time_local]  $status '
+    '"$request" $body_bytes_sent "$http_referer" '
+    '"$http_user_agent" "$http_x_forwarded_for"';
+  access_log   logs/access.log  main;
+
+  # ещё различные директивы 
+  sendfile     on;
+  tcp_nopush   on;
+  server_names_hash_bucket_size 128; # это может требоваться некоторым виртуальным хостам
+
+  # директива объявления виртуального сервера
+  server {
+  
+    listen       80; # говорим на каком TCP порту будет принимать запросы этот виртуальный сервер
+    server_name  domain1.com www.domain1.com; # на запрос каких доменных имён реагировать
+    access_log   logs/domain1.access.log  main; # описание файла запросов доступа к серверу, путь файла и применяемый формат записи данных, в данном случае main
+    root         html; # корневая папка для этого сервера
+ 
+    location ~ \.php$ { # при нахождении в location расположении файлов оканичающихся на .php 
+    # вызвать модуль fastcgi_pass и передать ему в качестве аргумента 127.0.0.1:1025
+      fastcgi_pass   127.0.0.1:1025; # вообщем говорим что все php передать на обработку fastcgi серверу 127.0.0.1:1025
+    }
+
+    # обработка статичных файлов
+    location ~ ^/(images|javascript|js|css|flash|media|static)/  { # для всех запросов соответствущим данному регулярному выражению
+      root    /var/www/virtual/big.server.com/htdocs; # выставить путь до родительского каталога
+      expires 30d; # закешировать запрашиваемые данный на 30 дней
+    }
+ 
+    # здесь проксируем (пересылаем) все запросы на другой какой-то сервер
+    location / {
+      proxy_pass      http://127.0.0.1:8080;
+    }
+
+  }
+ 
+  # объявлем вышестоящий сервер или набор серверов для балансировщика нагрузки
+  upstream big_server_com { 
+    server 127.0.0.3:8000 weight=5; # указываем адрес и порт сервера
+    server 127.0.0.3:8001 weight=5; # а так же можем указать дополнительные параметры, где weight=5 вес данного сервера 
+    server 192.168.0.1:8000;
+    server 192.168.0.1:8001;
+  }
+
+}
+
+
+```
+
 
 Давайте начнем.
 
@@ -127,25 +199,6 @@ Nginx модули работают с:
 Модуль Nginx *чрезвычайно* настраиваемый. Это возглает большую ответственность на разработчика модуля, он должен точно определить, как и когда модуль должен работать.
 Вызов модуля фактически осуществляется через вызов серии обратных вызовов, а их много.
 То есть, Вы должны понимать, что и когда функция должна выполнить:
--   Just before the server reads the config file
--   For every configuration directive for the location and server for which it appears;
--   When Nginx initializes the main configuration
--   When Nginx initializes the server (i.e., host/port) configuration
--   When Nginx merges the server configuration with the main configuration
--   When Nginx initializes the location configuration
--   When Nginx merges the location configuration with its parent server configuration
--   When Nginx's master process starts
--   When a new worker process starts
--   When a worker process exits
--   When the master exits
--   Handling a request
--   Filtering response headers
--   Filtering the response body
--   Picking a backend server
--   Initiating a request to a backend server
--   *Re*-initiating a request to a backend server
--   Processing the response from a backend server
--   Finishing an interaction with a backend server
 - Непосредственно перед тем, как сервер считает конфигурационный файл
 - Для каждой ли директивы в конфигурации location и server
 - Когда Nginx инициализирует основную конфигурацию
