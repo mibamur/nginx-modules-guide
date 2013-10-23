@@ -1,100 +1,65 @@
-Руководство разработчика модулей Nginx
-======================================
-
-Оригинальный пост написал Evan Miller.
-
-Начало статьи о том, чтоб Бэтмен - герой комикса, ничто без своего пояса принадлежностей.
-Вместо пояса принадлежностей, у сервера Nginx есть модули расширяющих его возможности.
-Когда Nginx должен применить архивирование GZIP или перекодировать ответ (response), он передает эту работу модулю. Когда Nginx блокирует доступ к ресурсам на основе IP-адреса или HTTP-аутентификации учетных данных, это делает вместо него модуль.
-Когда Nginx общается с Memcache или FastCGI серверами, это тоже делает модуль.
-
-Цель данного руководства - понять, что такое модуль Nginx и научиться его готовить.
-Модульная система Nginx имеет много мельчайших нюансов, так что вы, вероятно, захотите частенько возвращаться к этому документу.
-Я постарался описать концепцию как можно более понятной, но скажу прямо - написание модулей Nginx тяжелая работа.
-
-Но кто сказал, что это будет легко?
+Руководство разработчика Nginx модуля
+==================================
 
 Содержание
 -----------------
 
 [Введение](#prerequisites)
-
 [High-Level высокоуровневая передача полномочий модулю Nginx's](#overview)
-
 [Компоненты Nginx Module](#components)
-
 [Структура Конфигурации Модуля](#configuration-structs)
-
 [Директивы Модуля](#directives)
-
 [Содержание Модуля](#context)
-
 1.  [create\_loc\_conf](#create_loc_conf)
 2.  [merge\_loc\_conf](#merge_loc_conf)
-
 [Определение Модуля](#definition)
-
 [Установка Модуля](#installation)
-
 [Указателя](#handlers)
-
 [Анатомия Указателя (Non-proxying)](#non-proxying)
-
 1.  [Получение конфигурации location](#non-proxying-config)
 2.  [Генерация ответа-response](#non-proxying-response)
 3.  [Отправка Заголовка-header](#non-proxying-header)
 4.  [Отправка тела-body](#non-proxying-body)
-
 [Анатомия Upstream (a.k.a. Proxy) Указателя](#proxying)
-
 1.  [Краткое изложение upstream callbacks](#proxying-summary)
 2.  [The create\_request callback](#create_request)
 3.  [The process\_header callback](#process_header)
 4.  [Хранение состояния](#keeping-state)
-
 [Установка Указателя](#handler-installation)
-
 [Фильтры](#filters)
-
 1.  [Анатомия Заголовка Фильтра Header Filter](#filters-header)
 2.  [Анатомия Тело Фильтра Body Filter](#filters-body)
 3.  [Установка Фильтра](#filters-installation)
-
 [Балансировка нагрузки Load-Balancers](#load_balancers)
-
 1.  [Применение дериктив](#lb-directive)
 2.  [Функция регистрации](#lb-registration)
 3.  [Функция инициализации upstream-а](#lb-upstream)
 4.  [Функция инициализации peer](#lb-peer)
 5.  [Функция Балансировка нагрузки load-balancing](#lb-function)
 6.  [Функция инициализации peer release ](#lb-release)
-
 [Написание и Сборка нового модуля Nginx](#compiling)
-
 [Дополнительные материалы](#advanced)
-
 [Ссылки на источник](#code)
 
-0. Введение
------------
-
-Вы должны хорошо знять C. 
-Не просто "C-syntax"; Вы должны ориентироваться в структуре и не пугадться от ссылок на указатели и функции, и должы быть осводомлениы о работе пре-процессора preprocessor.
-Если Вы хотите освежить свои знания, нет ничего лучше чем книга [K&R](http://en.wikipedia.org/wiki/The_C_Programming_Language_(book)). (Мнение автора статья)
-
-Знания принципов работы HTTP протокола, также будут полезны. В конце-концов речь о web сервере.
-
-Вам также следует знать конфигурационные файлы с которыми работает Nginx.
-Содержимое конфигурационного файла можно разделить по содержанию в них контекста *contexts*
-- основной блок *main* - здесь указываются параметры рабобты самого nginx
- - блок *events* содержит директивы описывающих сколько например серверу nginx разрешено обрабатывать одновременно запросов одним воркером worker
- - существуют модули *mail*
- - основной модуль *http* - внутри которого идёт описание настроек при работе с HTTP протоколом
-  - блок сервера *server*
-   - расположение *location*
-  - балансировщик нагрузки, модуль *upstream* (как правило другой какой-то сервер или группа серверов)
-Каждый из которых может содержать *директивы* с одним и более аргументами.
-Directives in the main context apply to everything; directives in the server context apply to a particular host/port; directives in the upstream context refer to a set of backend servers; and directives in a location context apply only to matching web locations (e.g., "/", "/images", etc.) A location context inherits from the surrounding server context, and a server context inherits from the main context. The upstream context neither inherits nor imparts its properties; it has its own special directives that don't really apply elsewhere. I'll refer to these four contexts quite a bit, so… don't forget them.
+Nginx написан приемущественно на Си. Надо ориентироваться в структуре, ссылках на указатели и функции. А также понимать структуру конфигурационного файла.
+Конфигурационный файл оперерирует контекстами:
+* main
+* http
+ * server
+  * location
+Каждый контекст - это как правило отдельный модуль, область видимости которого объявляется с помощью фигурных скобок. Пример:
+```nginx
+http {
+ директива;
+ server {
+ директива;
+  location / {
+  директива;
+  }
+ }
+}
+```
+Внутри каждого контекста присутствуют свои директивы. Директивы могут принимать один или более аргументов. Например ```worker_processes  5;``` - это директива модуля ```main```. Каждая строка описания директивы должна заканчиваться точкой с запятой ```;```. Если правила описания конфигурационного файла nginx нарушены, сервер не сможет его коректно разобрать и не запуститься вообще.
 Приведу здесь пример конфигурационного файла ```nginx.conf```
 
 ```nginx
@@ -176,29 +141,44 @@ http {
 
 Давайте начнем.
 
-1. High-Level высокоуровневая передача полномочий модулю Nginx's
+1. Передача полномочий модулю Nginx's
 ----------------------------------------------------------------
 
 Nginx модули работают с:
+**handlers** - **обработчики** запроса и получения выходных данных
+**filters** - **фильтры** манипулируют выходными данными полученными от обработчика **handler**
+**load-balancers** - **балансировщик-нагрузки** выбирает внутренний сервер для передачи запроса, когда серверов больше одного
 
--   *handlers* обработчики запроса и получения выходных данных
--   *filters* манипулирование выходных данных полученных от обработчика *handler*
--   *load-balancers* выбор внутренего сервера для передачи запроса, когда серверов несколько
+Всю "реальную работу" выполняют Модули.
+- когда Nginx обслуживает файл или проксирует запрос на другой сервер, выполняет модуль обработки **handler**
+- когда Nginx архивирует вывод или выполняет подключение серверной стороны server-side, то это делается с помощью модуля фильтра **filter**
+- «Ядро» **core** Nginx заботится о работе сетевых протоколов и протоколах приложения, устанавливает последовательность выполнения модулей, если у последних есть право для обработки запроса.
+Децентрализованная архитектура - построенная на модулях позволяет писать автономные блоки, которые будут выполнять только то, что мы хотитим. Но в отличии от модулей Apache, модулю Nginx не связываются динамически. (Другими словами, они скомпилированы прямо в бинарник Nginx.). В то время существует форк Nginx-а от TaoBao в котором есть возможность вызывать модуля Nginx-а [динамическим](http://tengine.taobao.org/document/dso.html).
 
-Всю "реальную работу", которую вы могли бы связать с веб-сервером, делают Модули: всякий раз, когда Nginx обслуживает файл или проксирует запрос на другой сервер, выполняет модуль обработки, а когда Nginx архивирует вывод или выполняет включение серверной стороны server-side, то это делается с помощью модуля фильтра. «Ядро» Nginx просто заботится о всех сетевых протоколах и протоколах приложения и устанавливает последовательность выполнения модулей, которые имеют право для обработки запроса. Децентрализованная архитектура позволяет Вам, сделать хороший автономный блок, который делает то, что вы хотите.
-Заметка: В отличии от модулей Apache, модулю Nginx не связываются динамически. (Другими словами, они скомпилированы прямо в бинарник Nginx.)
+Как модуль вызывается? Как правило, при запуске сервера, каждый обработчик **handler** получает возможность прикрепиться к конкретных местам, определенным в конфигурации, если более одного обработчика прикрепляется к месту, то только один "победит" (но хороший составитель конфигурации не позволит случится конфликту). Обработчики **handlers** могут отреагировать тремя способами:
+- **все хорошо**
+- **была ошибка**
+- **передать** другому обработчику **handler**, который применим по умолчанию для этого контекста (например - обслуживание статических файлов).
+Модуль балансировки нагрузки работает как правило с обратными прокси **load-balancers** . Балансировщик нагрузки принимает запрос, передает его **backend** серверам и решает какой сервер получит запрос.
+Nginx поставляется с двумя модулями **load-balancers**:
+- Круговой (**round-robin**), раздает запросы по очереди
+- **IP hash** метод, который гарантирует, что конкретный клиент получит ответ от одного из внутренних серверов.
+(Возможно на сегодня существует больше...)
+Если обработчик **handler** не вызывает ошибки, вызывается фильтр **filter**. Несколько фильтров **filters** можно подключить в каждом месте, так что (например) ответ может быть сжат и затем разбит. Порядок их выполнения определяется во время сборки. Фильтры **filters** имеют классическую "цепочку ответственности", шаблон следующий: вызывается один фильтр, тот делает свою работу, затем вызывает следующий фильтр и так пока все фильтры не отработают, только потом  Nginx заканчивает подготовку ответа.
+Каждый фильтр **filter** не ждет пока предыдущий фильтр полностью закончит свою работу, это делается кусочками как при работе Unix pipe. Фильтры **filters** работают с **буферами**, которые, как правило, имеют размер (4Кб), хотя можно изменить это в ```nginx.conf```.
+То есть, например, модуль может начать сжатие ответа от внутреннего сервера и передавать его клиенту прежде чем, модуль получит весь ответ от внутреннего сервера. Звучит неплохо!
+Типичный цикл выглядит слудующим образом:
 
-Как модуль вызывается? Как правило, при запуске сервера, каждый обработчик handler получает возможность прикрепиться к конкретных местам, определенным в конфигурации, если более одного обработчика прикрепляется к кокретному месту, то только один "победит" (но хороший писатель конфигурации не позволит случится конфликту). Обработчики Handlers могут отреагировать тремя способами: "все хорошо", "была ошибка", или "отклонить чтобы обработать запрос и отложить обработчик handler по умолчанию (как правило, это нечто, что обслуживает статические файлы).
-Если обработчик случается с обратным прокси-сервером для некоторых рабочих ролей, есть место для еще одного типа модуля: балансировки нагрузки. Балансировик нагрузки принимает запрос, передает его backend серверам и решает какой сервер получит запрос. Nginx поставляется с двумя модулями балансировщиков нагрузки: Круговой (round-robin), которая раздает запросы вида карт в начале игры в покер и "IP хэш" метод, который гарантирует, что конкретный клиент получит ответ от одного из внутренних серверов при нескольких запросах.
-Если обработчик не вызывает ошибки, вызывается фильтр. Несколько фильтров можно подключить в каждом месте, так что (например) ответ может быть сжат и затем разбит. Порядок их выполнения определяется во время компиляции. Фильтры имеют классическую "цепочку ответственности" шаблон проектирования следующий: один фильтр вызывается, делает свою работу, а затем вызывает следующий фильтр, пока последний фильтр не будет вызван, и затем Nginx заканчивает подготовку ответа.
-Действительно хорошая часть работы цепочки фильтров - это то, что каждый фильтр не ждет предыдущий фильтр до конца, он может обрабатывать вывод предыдущего фильтра, как это происходит при использовании Unix pipe. Фильтры работают с * буферами *, которые, как правило, имеют размер страницы (4Кб), хотя вы можете изменить это в вашем nginx.conf. Это означает, например, что модуль может начать сжатие ответа от внутреннего сервера и передавать его клиенту прежде чем модулем получит весь ответ от внутреннего сервера.. Здорово!
-Таким образом, чтобы завершить обзор концепции, типичный цикл выглядит слудующим образом:
+1 Клиент посылает HTTP запрос
+2 Nginx выбирает подходящий обработчик, основываясь на location в конфигурации, (если применимо) балансировщик нагрузки выбирает внутренний сервер 
+3 обработчик делает свое дело и передает каждый выходной буфер для первого фильтра
+4 Первый фильтр пропускает вывод на второй фильтр 
+5 второй на третий и т.д. 
+6 окончательный ответ посылается клиенту.
 
-Клиент посылает HTTP запрос - Nginx выбирает подходящий обработчик, основываясь на location в конфигурации → (если применимо) балансировщик нагрузки выбирает внутренний сервер → обработчик делает свое дело и передает каждый выходной буфер для первого фильтра → Первый фильтр пропускает вывод на второй фильтр → второго на третье → третьей на четвертую и т.д. → окончательный ответ посылается клиенту.
+![alt](http://www.aosabook.org/images/nginx/architecture.png "nginx scheme")
 
-Модуль Nginx *чрезвычайно* настраиваемый. Это возглает большую ответственность на разработчика модуля, он должен точно определить, как и когда модуль должен работать.
-Вызов модуля фактически осуществляется через вызов серии обратных вызовов, а их много.
-То есть, Вы должны понимать, что и когда функция должна выполнить:
+Чтобы написать "правильный" модуль Nginx, нужно быть членом клуба "что-где-когда" происходит при работе Nginx и понимать критерии при которых необходимо вызвать модуль:
 - Непосредственно перед тем, как сервер считает конфигурационный файл
 - Для каждой ли директивы в конфигурации location и server
 - Когда Nginx инициализирует основную конфигурацию
@@ -219,20 +199,19 @@ Nginx модули работают с:
 - Обработка *ответа* от внутреннего сервера
 - Окончательное взаимодействие с внутренним сервером
 
-Holy mackerel! It's a bit overwhelming. You've got a lot of power at your disposal, but you can still do something useful using only a couple of these hooks and a couple of corresponding functions. Time to dive into some modules.
-Святая скумбрия! Это выглядит немного удручающим. Вы должны очень хорошо постараться, чтобы получить результат, используя только пару хуков и вызвав пару соответствующих функций.
-Ну чтож, не стоит хмуриться. Самое время, погрузиться в описание некоторых модулей.
+Укроп сушеный! Вообще могут понадобиться и другие травы, чтобы вкурить все моменты.
 
 2. Компоненты модуля Nginx
 --------------------------
-
-As I said, you have a *lot* of flexibility when it comes to making an Nginx module. This section will describe the parts that are almost always present. It's intended as a guide for understanding a module, and a reference for when you think you're ready to start writing a module.
-Как я уже сказал, Вы должны обладать хорошим кунг-фу когда дело доходит до разработке модуля Nginx. Этот раздел описывает части, которые почти всегда присутствуют. Он предназначен в качестве руководства для понимания модуля - это ссылка, для тех кто думает, что готов к написанию модуля Nginx.
-
 ### 2.1. Структура конфигурации модуля)
 
-Модули могут содержать до трех описаний в структуре конфигурации. В контексте: один для основного main, для сервера server и для расположения location. 
-Для большинства модулей необходимо место в конфигурации. Называться они могут как `ngx_http_<module name>_(main|srv|loc)_conf_t`. Вот пример, взятый из модуля DAV:
+Для большинства модулей необходимо место в конфигурационном файле.
+Модули могут содержать до трех описаний в структуре конфигурации.
+- для **main**
+- для **server**
+- и для расположения **location** 
+Модули могут называться как: ```ngx_http_<module-name>_(main|srv|loc)_conf_t```. Например ```ngx_http_dav_loc_conf_t``` - nginx_в-контексте-модуля-http_модуль-**dav**_применим-к-**location**.
+Модуль DAV:
 
 ```c
     typedef struct {
@@ -242,19 +221,23 @@ As I said, you have a *lot* of flexibility when it comes to making an Nginx modu
     } ngx_http_dav_loc_conf_t;
 ```
 
-Обратите внимание, что Nginx имеет специальные типы данных (`ngx_uint_t` и `ngx_flag_t`);
-это всего лишь псевдонимы для примитивных типов данных, которые вы знаете и любите :)
-(см. [core/ngx\_config.h](http://lxr.evanmiller.org/http/source/core/ngx_config.h#L79) если Вам интересно).
+Обратите внимание, что Nginx имеет специальные типы данных (`ngx_uint_t` и `ngx_flag_t`) - это всего лишь псевдонимы для примитивов типов данных (см. [core/ngx\_config.h](http://lxr.evanmiller.org/http/source/core/ngx_config.h#L79) ).
 
-Эелементы структуры конфигурации наполняются директивами модуля.
+Элементы структуры конфигурации наполняются директивами модуля.
+Например:
+```nginx
+    location / {
+      # модуль proxy
+      proxy_pass      http://127.0.0.1:8080; # proxy_pass - директива модуля 
+    }
+```
 
 ### 2.2. Директивы модуля
 
 Директивы модуля доолжны быть описаны в статическом массиве `ngx_command_t`.
-Вот пример того, как это объявляется, взятые из небольшого модуля, что я написал:
+Вот пример того, как это объявляется:
 
 ```c
-
     static ngx_command_t  ngx_http_circle_gif_commands[] = {
         { ngx_string("circle_gif"),
           NGX_HTTP_LOC_CONF|NGX_CONF_NOARGS,
@@ -273,11 +256,9 @@ As I said, you have a *lot* of flexibility when it comes to making an Nginx modu
           ngx_null_command
     };
 ```
-
 В `ngx_command_t` описываем структуру с которой будет работать модуль, смотрите [core/ngx\_conf\_file.h](http://lxr.evanmiller.org/http/source/core/ngx_conf_file.h#L77):
 
 ```c
-
     struct ngx_command_t {
         ngx_str_t             name;
         ngx_uint_t            type;
@@ -287,70 +268,90 @@ As I said, you have a *lot* of flexibility when it comes to making an Nginx modu
         void                 *post;
     };
 ```
+Каждый элемент имеет свое назначение.
 
-Кажется, что многовато, но каждый элемент имеет свою цель.
+Имя директивы строка `name`  без пробелов - тип её данных `ngx_str_t`. Например `ngx_str("proxy_pass")`.
+Заметка: `ngx_str_t` структура  с элементами данных `data`, в виде строк и длинной `len` этой строки. 
+Nginx использует эту структуру данных - так что в большинстве мест можно ожидать, что это именно это.
 
-Имя директивы `name` строка без пробелов - тип её данных `ngx_str_t`. Например `ngx_str("proxy_pass")`.
-Заметка: `ngx_str_t` структура  с элементами данных `data`, в виде строк, и длинной `len` этой строки. 
-Nginx использует эту структуру данных - так что в большинстве мест можно ожидать, что это именно эта строка.
+`type` представляет собой набор флагов, которые указывают, где директива имеет право быть вызвана и сколько она принимает аргументов. Установленные флаги соединены через ИЛИ
 
-`type` is a set of flags that indicate where the directive is legal and how many arguments the directive takes. Applicable flags, which are bitwise-OR'd, are:
+-   `NGX_HTTP_MAIN_CONF`: директива разрешена в main
+-   `NGX_HTTP_SRV_CONF`: директива разрешена в server (host)
+-   `NGX_HTTP_LOC_CONF`: директива разрешена в location
+-   `NGX_HTTP_UPS_CONF`: директива разрешена в upstream
 
--   `NGX_HTTP_MAIN_CONF`: directive is valid in the main config
--   `NGX_HTTP_SRV_CONF`: directive is valid in the server (host) config
--   `NGX_HTTP_LOC_CONF`: directive is valid in a location config
--   `NGX_HTTP_UPS_CONF`: directive is valid in an upstream config
-
--   `NGX_CONF_NOARGS`: directive can take 0 arguments
--   `NGX_CONF_TAKE1`: directive can take exactly 1 argument
--   `NGX_CONF_TAKE2`: directive can take exactly 2 arguments
+-   `NGX_CONF_NOARGS`: директива может быть без аргументов
+-   `NGX_CONF_TAKE1`: 1 аргумент
+-   `NGX_CONF_TAKE2`: ровно 2 аргумента
 -   …
--   `NGX_CONF_TAKE7`: directive can take exactly 7 arguments
+-   `NGX_CONF_TAKE7`: 7 аргументов
 
--   `NGX_CONF_FLAG`: directive takes a boolean ("on" or "off")
--   `NGX_CONF_1MORE`: directive must be passed at least one argument
--   `NGX_CONF_2MORE`: directive must be passed at least two arguments
+-   `NGX_CONF_FLAG`: boolean ("on" или "off")
+-   `NGX_CONF_1MORE`: хотя бы 1 аргумент
+-   `NGX_CONF_2MORE`: как минимум 2 аргумента 
 
-There are a few other options, too, see [core/ngx\_conf\_file.h](http://lxr.evanmiller.org/http/source/core/ngx_conf_file.h#L1).
+```c
+static ngx_command_t  ngx_http_gzip_static_commands[] = {
+
+    { ngx_string("gzip_static"),
+    NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_enum_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_gzip_static_conf_t, enable),
+      &ngx_http_gzip_static },
+
+      ngx_null_command
+};
+```
+или смотрите пример в [core/ngx\_conf\_file.h](http://lxr.evanmiller.org/http/source/core/ngx_conf_file.h#L1).
 
 The `set` struct element is a pointer to a function for setting up part of the module's configuration; typically this function will translate the arguments passed to this directive and save an appropriate value in its configuration struct. This setup function will take three arguments:
 
-1.  a pointer to an `ngx_conf_t` struct, which contains the arguments passed to the directive
-2.  a pointer to the current `ngx_command_t` struct
-3.  a pointer to the module's custom configuration struct
+Структура элемента `set` представляет собой указатель на функцию для создания части конфигурации модуля; Эта функция обычно передает аргументы, переданные этой директиве и сохраняет соответствующее значение в структуре конфигурации. Эта функция состоит от трех аргументов:
 
-This setup function will be called when the directive is encountered. Nginx provides a number of functions for setting particular types of values in the custom configuration struct. These functions include:
+1.  указатель на структуру `ngx_conf_t`, который содержит аргументы переданные директиве
+2.  указатель на текущую структуру `ngx_command_t`
+3.  указатель на структуру конфигурации модуля
 
--   `ngx_conf_set_flag_slot`: translates "on" or "off" to 1 or 0
--   `ngx_conf_set_str_slot`: saves a string as an `ngx_str_t`
--   `ngx_conf_set_num_slot`: parses a number and saves it to an `int`
--   `ngx_conf_set_size_slot`: parses a data size ("8k", "1m", etc.) and saves it to a `size_t`
+Когда в конфигурационном файле встречается модуль, вызывается функция установки.
+Nginx предоставляет ряд функций для установления конкретных типов значений в пользовательской структуре конфигурации. Эти функции в себя включают:
 
-There are several others, and they're quite handy (see [core/ngx\_conf\_file.h](http://lxr.evanmiller.org/http/source/core/ngx_conf_file.h#L329)). Modules can also put a reference to their own function here, if the built-ins aren't quite good enough.
+-   `ngx_conf_set_flag_slot`: переводит "on" или "off" к виду 1 или 0
+-   `ngx_conf_set_str_slot`: сохранить строку как `ngx_str_t`
+-   `ngx_conf_set_num_slot`: распарсить цифры и сохранить как `int`
 
-How do these built-in functions know where to save the data? That's where the next two elements of `ngx_command_t` come in, `conf` and `offset`. `conf` tells Nginx whether this value will get saved to the module's main configuration, server configuration, or location configuration (with `NGX_HTTP_MAIN_CONF_OFFSET`, `NGX_HTTP_SRV_CONF_OFFSET`, or `NGX_HTTP_LOC_CONF_OFFSET`). `offset` then specifies which part of this configuration struct to write to.
+Полный список смотрите ( [core/ngx\_conf\_file.h](http://lxr.evanmiller.org/http/source/core/ngx_conf_file.h#L329)).
+Modules can also put a reference to their own function here, if the built-ins aren't quite good enough.
+Модули также могут здесь поместить ссылку на свою функцию, если встроенные функции модуля не достаточно хороши.
 
-*Finally*, `post` is just a pointer to other crap the module might need while it's reading the configuration. It's often `NULL`.
+Как эти встроенные функции знают, где находятся данные?
+Помогают им в этом два элемента из `ngx_command_t`
+- `conf` говорит Nginx где должны быть получены данные, в каком контексте конфигурационного файла: основном **main**, контексте сервера **server**, или местоположения **location**. С помощью (`NGX_HTTP_MAIN_CONF_OFFSET`, `NGX_HTTP_SRV_CONF_OFFSET`, or `NGX_HTTP_LOC_CONF_OFFSET`)
+- `offset` определяет, какая часть этой структуры в конфигурации будет изменена.
 
-The commands array is terminated with `ngx_null_command` as the last element.
+И наконец `post` - это указатель на какую-нибудь вещь для другого модуля. Часто это `NULL`.
 
-### 2.3. The Module Context
+Для объявления окончания массива передается `ngx_null_command` как последний элемент.
 
-This is a static `ngx_http_module_t` struct, which just has a bunch of function references for creating the three configurations and merging them together. Its name is `ngx_http_<module name>_module_ctx`. In order, the function references are:
+### 2.3. Контекст модуля
 
--   preconfiguration
--   postconfiguration
--   creating the main conf (i.e., do a malloc and set defaults)
--   initializing the main conf (i.e., override the defaults with what's in nginx.conf)
--   creating the server conf
--   merging it with the main conf
--   creating the location conf
--   merging it with the server conf
+Это статичная структура `ngx_http_module_t`, включает в себя ссылки на функции для создания конфигурации в необходимых местах и их объединения.
+Должен быть назван как `ngx_http_<module name>_module_ctx`.
+При этом функции ссылаются на:
 
-These take different arguments depending on what they're doing. Here's the struct definition, taken from [http/ngx\_http\_config.h](http://lxr.evanmiller.org/http/source/http/ngx_http_config.h#L22), so you can see the different function signatures of the callbacks:
+- пред-конфигурацию
+- пост-конфигурацию
+- создание основной **main** конфигурации (выполнятеся выделение памяти и установка значений по умолчанию)
+- инициализация основной **main** конфигурации (переписать настройки поумолчания на настройки из nginx.conf)
+- создание конфигурации **server**
+- объединение **server** с основной **main** конфигурацией
+- создание конфигурации **location**
+- объединение **location** с  **server** конфигурацией 
 
-``
+В зависимости от того, что они делают, они принимают различные аргументы. Вот определение структуры, взятые из [http/ngx\_http\_config.h](http://lxr.evanmiller.org/http/source/http/ngx_http_config.h#L22), вы можете видеть, что раззличные функции имет callback обратную совестимость:
 
+```c
     typedef struct {
         ngx_int_t   (*preconfiguration)(ngx_conf_t *cf);
         ngx_int_t   (*postconfiguration)(ngx_conf_t *cf);
@@ -364,15 +365,18 @@ These take different arguments depending on what they're doing. Here's the struc
         void       *(*create_loc_conf)(ngx_conf_t *cf);
         char       *(*merge_loc_conf)(ngx_conf_t *cf, void *prev, void *conf);
     } ngx_http_module_t;
+```
+Вы можете выставить `NULL` для тех функций которые Вам не нужны и Nginx будет знать об этом.
 
-You can set functions you don't need to `NULL`, and Nginx will figure it out.
+Большинство указателей использует только две основных функции:
+- функция выделения памяти для специфичного location в конфигурации (вызывается `ngx_http_<module name>_create_loc_conf`)
+- и функция установки значений конфигурации и их объединение
+(вызывается `ngx_http_<module name >_merge_loc_conf`).
+Также функция merge обрабатывает ошибки при сборке конфигурации и не даёт запустить сервер, если таковые имеются.
 
-Most handlers just use the last two: a function to allocate memory for location-specific configuration (called `ngx_http_<module name>_create_loc_conf`), and a function to set defaults and merge this configuration with any inherited configuration (called `ngx_http_<module name >_merge_loc_conf`). The merge function is also responsible for producing an error if the configuration is invalid; these errors halt server startup.
+Пример структуры контекста модуля:
 
-Here's an example module context struct:
-
-``
-
+```c
     static ngx_http_module_t  ngx_http_circle_gif_module_ctx = {
         NULL,                          /* preconfiguration */
         NULL,                          /* postconfiguration */
@@ -386,15 +390,17 @@ Here's an example module context struct:
         ngx_http_circle_gif_create_loc_conf,  /* create location configuration */
         ngx_http_circle_gif_merge_loc_conf /* merge location configuration */
     };
-
-Time to dig in deep a little bit. These configuration callbacks look quite similar across all modules and use the same parts of the Nginx API, so they're worth knowing about.
+```
+Если немного покапаться в исходниках модулей, то можно много где обнаружить похожее  - это Nginx API.
 
 #### 2.3.1. create\_loc\_conf
 
-Here's what a bare-bones create\_loc\_conf function looks like, taken from the circle\_gif module I wrote (see the [the source](/nginx/ngx_http_circle_gif_module.c.txt)). It takes a directive struct (`ngx_conf_t`) and returns a newly created module configuration struct (in this case `ngx_http_circle_gif_loc_conf_t`).
+Вот скелет ```create_loc_conf``` - функция выглядит как, взятая из ```circle_gif```.
+А вот модуль (см. [источник] (http://www.evanmiller.org/nginx/ngx_http_circle_gif_module.c.txt).
+Он принимает директиву структуры (`ngx_conf_t`) и возвращает вновь созданную структуру конфигурации модуля
+(в данном случае `ngx_http_circle_gif_loc_conf_t`).
 
-``
-
+```c
     static void *
     ngx_http_circle_gif_create_loc_conf(ngx_conf_t *cf)
     {
@@ -408,17 +414,19 @@ Here's what a bare-bones create\_loc\_conf function looks like, taken from the c
         conf->max_radius = NGX_CONF_UNSET_UINT;
         return conf;
     }
+```
+Сперва передаем уведомление Nginx's о выделении памяти; он позаботиться потом о высвобождении памяти модулем с помощью своих функций `ngx_palloc` (`malloc` аналог) или `ngx_pcalloc` (`calloc` аналог).
 
-First thing to notice is Nginx's memory allocation; it takes care of the `free`'ing as long as the module uses `ngx_palloc` (a `malloc` wrapper) or `ngx_pcalloc` (a `calloc` wrapper).
-
-The possible UNSET constants are `NGX_CONF_UNSET_UINT`, `NGX_CONF_UNSET_PTR`, `NGX_CONF_UNSET_SIZE`, `NGX_CONF_UNSET_MSEC`, and the catch-all `NGX_CONF_UNSET`. UNSET tell the merging function that the value should be overridden.
+Есть возможность использовать константы UNSET:
+`NGX_CONF_UNSET_UINT`, `NGX_CONF_UNSET_PTR`, `NGX_CONF_UNSET_SIZE`, `NGX_CONF_UNSET_MSEC`,
+и сбросить все `NGX_CONF_UNSET`.
+UNSET говорит функции объединения, что значение может быть перезаписано.
 
 #### 2.3.2. merge\_loc\_conf
 
-Here's the merging function used in the circle\_gif module:
+Пример функции объединения в модуле circle\_gif:
 
-``
-
+```c
     static char *
     ngx_http_circle_gif_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     {
@@ -441,11 +449,11 @@ Here's the merging function used in the circle\_gif module:
 
         return NGX_CONF_OK;
     }
+```
+Первым делом Nginx объединяет различные типы данных (`ngx_conf_merge_<data type>_value`); аргументы которых:
 
-Notice first that Nginx provides nice merging functions for different data types (`ngx_conf_merge_<data type>_value`); the arguments are
-
-1.  *this* location's value
-2.  the value to inherit if \#1 is not set
+1.  **this** location's *value* - **текущее** *значение* расположения
+2.  the  *value* to inherit if \#1 is not set
 3.  the default if neither \#1 nor \#2 is set
 
 The result is then stored in the first argument. Available merge functions include `ngx_conf_merge_size_value`, `ngx_conf_merge_msec_value`, and others. See [core/ngx\_conf\_file.h](http://lxr.evanmiller.org/http/source/core/ngx_conf_file.h#L254) for a full list.
