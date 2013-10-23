@@ -1,14 +1,14 @@
-Emiller's Guide To Nginx Module Development
-===========================================
+Emiller's Руководство по разработке модуля Nginx
+================================================
 
 By [Evan Miller](/)
 
-First published: April 28, 2007 (Last edit: January 16, 2013 – [changes](#changes))
+Первая публикация: 28 Апреля, 2007 (Последняя редакция: 16 Января, 2013 – [changes](#changes))
 
 Bruce Wayne: *What's that?*
  Lucius Fox: *The Tumbler? Oh… you wouldn't be interested in that.*
 
-To fully appreciate Nginx, the web server, it helps to understand Batman, the comic book character.
+Чтобы полностью оценить Nginx, it helps to understand Batman, the comic book character.
 
 Batman is fast. Nginx is fast. Batman fights crime. Nginx fights wasted CPU cycles and memory leaks. Batman performs well under pressure. Nginx, for its part, excels under heavy server loads.
 
@@ -20,7 +20,7 @@ But Batman would be almost nothing without the **Batman utility belt**.
 
 At any given time, Batman's utility belt might contain a lock pick, several batarangs, bat-cuffs, a bat-tracer, bat-darts, night vision goggles, thermite grenades, smoke pellets, a flashlight, a kryptonite ring, an acetylene torch, or an Apple iPhone. When Batman needs to tranquilize, blind, deafen, stun, track, stop, smoke out, or text-message the enemy, you better believe he's reaching down for his bat-belt. The belt is so crucial to Batman's operations that if Batman had to choose between wearing pants and wearing the utility belt, he would definitely choose the belt. In fact, he \*did\* choose the utility belt, and that's why Batman wears rubber tights instead of pants (Fig. 1).
 
-Instead of a utility belt, Nginx has a **module chain**. When Nginx needs to gzip or chunk-encode a response, it whips out a module to do the work. When Nginx blocks access to a resource based on IP address or HTTP auth credentials, a module does the deflecting. When Nginx communicates with Memcache or FastCGI servers, a module is the walkie-talkie.
+Вместо пояса принадлежностей, Nginx имеет модули расширения. Когда Nginx должен применить GZIP или перекодировать ответ (response), он передает эту работу модулю. Когда Nginx блокирует доступ к ресурсам на основе IP-адреса или HTTP-аутентификации учетных данных, это делает вместо него модуль. Когда Nginx общается с Memcache или FastCGI серверами, это тоже делает модуль.
 
 Batman's utility belt holds a lot of doo-hickeys, but occasionally Batman needs a new tool. Maybe there's a new enemy against whom bat-cuffs and batarangs are ineffectual. Or Batman needs a new ability, like being able to breathe underwater. That's when Batman rings up **Lucius Fox** to engineer the appropriate bat-gadget.
 
@@ -28,109 +28,105 @@ Batman's utility belt holds a lot of doo-hickeys, but occasionally Batman needs 
 
 **Figure 2**: Bruce Wayne (née Batman) consults with his engineer, Lucius Fox
 
-The purpose of this guide is to teach you the details of Nginx's module chain, so that you may be like Lucius Fox. When you're done with the guide, you'll be able to design and produce high-quality modules that enable Nginx to do things it couldn't do before. Nginx's module system has a lot of nuance and nitty-gritty, so you'll probably want to refer back to this document often. I have tried to make the concepts as clear as possible, but I'll be blunt, writing Nginx modules can still be hard work.
+Целью данного руководства является научить Вас деталям модуля Nginx. Когда вы закончите с этим руководством, вы будете в состоянии проектировать и производить высококачественные модули, которые позволяют Nginx делать вещи, которые он не мог раньше. Модульная система Nginx имеет много мельчайших нюансов, так что вы, вероятно, захотите часто возвращаться к этому документу. Я постарался сделать концепцию как можно более понятной, но скажу прямо - написание модулей Nginx тяжелая работа.
 
-But whoever said making bat-tools would be easy?
+Но кто сказал, что это будет легко?
 
-Table of Contents
+Содержание
 -----------------
 
-[Prerequisites](#prerequisites)
+[Предпосылки](#prerequisites)
 
-[High-Level Overview of Nginx's Module Delegation](#overview)
+[High-Level высокоуровневая передача полномочий модулю Nginx's](#overview)
 
-[Components of an Nginx Module](#components)
+[Компоненты Nginx Module](#components)
 
-[Module Configuration Struct(s)](#configuration-structs)
+[Структура Конфигурации Модуля](#configuration-structs)
 
-[Module Directives](#directives)
+[Директивы Модуля](#directives)
 
-[The Module Context](#context)
+[Содержание Модуля](#context)
 
 1.  [create\_loc\_conf](#create_loc_conf)
 2.  [merge\_loc\_conf](#merge_loc_conf)
 
-[The Module Definition](#definition)
+[Определение Модуля](#definition)
 
-[Module Installation](#installation)
+[Установка Модуля](#installation)
 
-[Handlers](#handlers)
+[Указателя](#handlers)
 
-[Anatomy of a Handler (Non-proxying)](#non-proxying)
+[Анатомия Указателя (Non-proxying)](#non-proxying)
 
-1.  [Getting the location configuration](#non-proxying-config)
-2.  [Generating a response](#non-proxying-response)
-3.  [Sending the header](#non-proxying-header)
-4.  [Sending the body](#non-proxying-body)
+1.  [Получение конфигурации location](#non-proxying-config)
+2.  [Генерация ответа-response](#non-proxying-response)
+3.  [Отправка Заголовка-header](#non-proxying-header)
+4.  [Отправка тела-body](#non-proxying-body)
 
-[Anatomy of an Upstream (a.k.a. Proxy) Handler](#proxying)
+[Анатомия Upstream (a.k.a. Proxy) Указателя](#proxying)
 
-1.  [Summary of upstream callbacks](#proxying-summary)
+1.  [Краткое изложение upstream callbacks](#proxying-summary)
 2.  [The create\_request callback](#create_request)
 3.  [The process\_header callback](#process_header)
-4.  [Keeping state](#keeping-state)
+4.  [Хранение состояния](#keeping-state)
 
-[Handler Installation](#handler-installation)
+[Установка Указателя](#handler-installation)
 
-[Filters](#filters)
+[Фильтры](#filters)
 
-1.  [Anatomy of a Header Filter](#filters-header)
-2.  [Anatomy of a Body Filter](#filters-body)
-3.  [Filter Installation](#filters-installation)
+1.  [Анатомия Заголовка Фильтра Header Filter](#filters-header)
+2.  [Анатомия Тело Фильтра Body Filter](#filters-body)
+3.  [Установка Фильтра](#filters-installation)
 
-[Load-Balancers](#load_balancers)
+[Балансировка нагрузки Load-Balancers](#load_balancers)
 
-1.  [The enabling directive](#lb-directive)
-2.  [The registration function](#lb-registration)
-3.  [The upstream initialization function](#lb-upstream)
-4.  [The peer initialization function](#lb-peer)
-5.  [The load-balancing function](#lb-function)
-6.  [The peer release function](#lb-release)
+1.  [Применение дериктив](#lb-directive)
+2.  [Функция регистрации](#lb-registration)
+3.  [Функция инициализации upstream-а](#lb-upstream)
+4.  [Функция инициализации peer](#lb-peer)
+5.  [Функция Балансировка нагрузки load-balancing](#lb-function)
+6.  [Функция инициализации peer release ](#lb-release)
 
-[Writing and Compiling a New Nginx Module](#compiling)
+[Написание и Сборка нового модуля Nginx](#compiling)
 
-[Advanced Topics](#advanced)
+[Дополнительные материалы](#advanced)
 
-[Code References](#code)
+[Ссылки на источник](#code)
 
-0. Prerequisites
-----------------
+0. Предпосылки
+--------------
 
-You should be comfortable with C. Not just "C-syntax"; you should know your way around a struct and not be scared off by pointers and function references, and be cognizant of the preprocessor. If you need to brush up, nothing beats [K&R](http://en.wikipedia.org/wiki/The_C_Programming_Language_(book)).
+Вы должны хорошо знять C. Не просто "C-syntax"; Вы должны ориентироваться в структуре и не пугадться от ссылок на указатели и функции, и должы быть осводомлениы о работе пре-процессора preprocessor. Если Вы хотите освежить знания, Нет ничего лучше чем [K&R](http://en.wikipedia.org/wiki/The_C_Programming_Language_(book)).
 
-Basic understanding of HTTP is useful. You'll be working on a web server, after all.
+Основы работы HTTP будут полезны. В конце-концов мы работаем на web сервере.
 
-You should also be familiar with Nginx's configuration file. If you're not, here's the gist of it: there are four *contexts* (called *main*, *server*, *upstream*, and *location*) which can contain directives with one or more arguments. Directives in the main context apply to everything; directives in the server context apply to a particular host/port; directives in the upstream context refer to a set of backend servers; and directives in a location context apply only to matching web locations (e.g., "/", "/images", etc.) A location context inherits from the surrounding server context, and a server context inherits from the main context. The upstream context neither inherits nor imparts its properties; it has its own special directives that don't really apply elsewhere. I'll refer to these four contexts quite a bit, so… don't forget them.
+Вам также следует знать конфигурационные файлы Nginx. Если Вы не знаете, то в кратце существует четыре контекста *contexts* (называемые: основа *main*, сервер *server*, вышестоящий пункт назначения *upstream*, и расположение *location*) которые могут содержать директивы с один и более аргументом. Directives in the main context apply to everything; directives in the server context apply to a particular host/port; directives in the upstream context refer to a set of backend servers; and directives in a location context apply only to matching web locations (e.g., "/", "/images", etc.) A location context inherits from the surrounding server context, and a server context inherits from the main context. The upstream context neither inherits nor imparts its properties; it has its own special directives that don't really apply elsewhere. I'll refer to these four contexts quite a bit, so… don't forget them.
 
-Let's get started.
+Давайте начнем.
 
-1. High-Level Overview of Nginx's Module Delegation
----------------------------------------------------
+1. High-Level высокоуровневая передача полномочий модулю Nginx's
+----------------------------------------------------------------
 
-Nginx modules have three roles we'll cover:
+Nginx модули работают с:
 
--   *handlers* process a request and produce output
--   *filters* manipulate the output produced by a handler
--   *load-balancers* choose a backend server to send a request to, when more than one backend server is eligible
+-   *handlers* обработчики запроса и получения выходных данных
+-   *filters* манипулирование выходных данных полученных от обработчика *handler*
+-   *load-balancers* выбор внутренего сервера для передачи запроса, когда серверов несколько
 
-Modules do all of the "real work" that you might associate with a web server: whenever Nginx serves a file or proxies a request to another server, there's a handler module doing the work; when Nginx gzips the output or executes a server-side include, it's using filter modules. The "core" of Nginx simply takes care of all the network and application protocols and sets up the sequence of modules that are eligible to process a request. The de-centralized architecture makes it possible for \*you\* to make a nice self-contained unit that does something you want.
+Всю "реальную работу", которую вы могли бы связать с веб-сервером, делают Модули: всякий раз, когда Nginx обслуживает файл или проксирует запрос на другой сервер, выполняет модуль обработки, а когда Nginx архивирует вывод или выполняет включение серверной стороны server-side, то это делается с помощью модуля фильтра. «Ядро» Nginx просто заботится о всех сетевых протоколах и протоколах приложения и устанавливает последовательность выполнения модулей, которые имеют право для обработки запроса. Децентрализованная архитектура позволяет Вам, сделать хороший автономный блок, который делает то, что вы хотите.
+Заметка: В отличии от модулей Apache, модулю Nginx не связываются динамически. (Другими словами, они скомпилированы прямо в бинарник Nginx.)
 
-Note: Unlike modules in Apache, Nginx modules are *not* dynamically linked. (In other words, they're compiled right into the Nginx binary.)
+Как модуль вызывается? Как правило, при запуске сервера, каждый обработчик handler получает возможность прикрепиться к конкретных местам, определенным в конфигурации, если более одного обработчика прикрепляется к кокретному месту, то только один "победит" (но хороший писатель конфигурации не позволит случится конфликту). Обработчики Handlers могут отреагировать тремя способами: "все хорошо", "была ошибка", или "отклонить чтобы обработать запрос и отложить обработчик handler по умолчанию (как правило, это нечто, что обслуживает статические файлы).
+Если обработчик случается с обратным прокси-сервером для некоторых рабочих ролей, есть место для еще одного типа модуля: балансировки нагрузки. Балансировик нагрузки принимает запрос, передает его backend серверам и решает какой сервер получит запрос. Nginx поставляется с двумя модулями балансировщиков нагрузки: Круговой (round-robin), которая раздает запросы вида карт в начале игры в покер и "IP хэш" метод, который гарантирует, что конкретный клиент получит ответ от одного из внутренних серверов при нескольких запросах.
+Если обработчик не вызывает ошибки, вызывается фильтр. Несколько фильтров можно подключить в каждом месте, так что (например) ответ может быть сжат и затем разбит. Порядок их выполнения определяется во время компиляции. Фильтры имеют классическую "цепочку ответственности" шаблон проектирования следующий: один фильтр вызывается, делает свою работу, а затем вызывает следующий фильтр, пока последний фильтр не будет вызван, и затем Nginx заканчивает подготовку ответа.
+Действительно хорошая часть работы цепочки фильтров - это то, что каждый фильтр не ждет предыдущий фильтр до конца, он может обрабатывать вывод предыдущего фильтра, как это происходит при использовании Unix pipe. Фильтры работают с * буферами *, которые, как правило, имеют размер страницы (4Кб), хотя вы можете изменить это в вашем nginx.conf. Это означает, например, что модуль может начать сжатие ответа от внутреннего сервера и передавать его клиенту прежде чем модулем получит весь ответ от внутреннего сервера.. Здорово!
+Таким образом, чтобы завершить обзор концепции, типичный цикл выглядит слудующим образом:
 
-How does a module get invoked? Typically, at server startup, each handler gets a chance to attach itself to particular locations defined in the configuration; if more than one handler attaches to a particular location, only one will "win" (but a good config writer won't let a conflict happen). Handlers can return in three ways: all is good, there was an error, or it can decline to process the request and defer to the default handler (typically something that serves static files).
+Клиент посылает HTTP запрос - Nginx выбирает подходящий обработчик, основываясь на location в конфигурации → (если применимо) балансировщик нагрузки выбирает внутренний сервер → обработчик делает свое дело и передает каждый выходной буфер для первого фильтра → Первый фильтр пропускает вывод на второй фильтр → второго на третье → третьей на четвертую и т.д. → окончательный ответ посылается клиенту.
 
-If the handler happens to be a reverse proxy to some set of backend servers, there is room for another type of module: the load-balancer. A load-balancer takes a request and a set of backend servers and decides which server will get the request. Nginx ships with two load-balancing modules: round-robin, which deals out requests like cards at the start of a poker game, and the "IP hash" method, which ensures that a particular client will hit the same backend server across multiple requests.
-
-If the handler does not produce an error, the filters are called. Multiple filters can hook into each location, so that (for example) a response can be compressed and then chunked. The order of their execution is determined at compile-time. Filters have the classic "CHAIN OF RESPONSIBILITY" design pattern: one filter is called, does its work, and then calls the next filter, until the final filter is called, and Nginx finishes up the response.
-
-The really cool part about the filter chain is that each filter doesn't wait for the previous filter to finish; it can process the previous filter's output as it's being produced, sort of like the Unix pipeline. Filters operate on *buffers*, which are usually the size of a page (4K), although you can change this in your nginx.conf. This means, for example, a module can start compressing the response from a backend server and stream it to the client before the module has received the entire response from the backend. Nice!
-
-So to wrap up the conceptual overview, the typical processing cycle goes:
-
-Client sends HTTP request → Nginx chooses the appropriate handler based on the location config → (if applicable) load-balancer picks a backend server → Handler does its thing and passes each output buffer to the first filter → First filter passes the output to the second filter → second to third → third to fourth → etc. → Final response sent to client
-
-I say "typically" because Nginx's module invocation is *extremely* customizable. It places a big burden on module writers to define exactly how and when the module should run (I happen to think too big a burden). Invocation is actually performed through a series of callbacks, and there are a lot of them. Namely, you can provide a function to be executed:
-
+Модуль Nginx *чрезвычайно* настраиваемый. Это возглает большую ответственность на разработчика модуля, он должен точно определить, как и когда модуль должен работать.
+Вызов модуля фактически осуществляется через вызов серии обратных вызовов, а их много.
+То есть, Вы должны понимать, что и когда функция должна выполнить:
 -   Just before the server reads the config file
 -   For every configuration directive for the location and server for which it appears;
 -   When Nginx initializes the main configuration
@@ -150,35 +146,61 @@ I say "typically" because Nginx's module invocation is *extremely* customizable.
 -   *Re*-initiating a request to a backend server
 -   Processing the response from a backend server
 -   Finishing an interaction with a backend server
+- Непосредственно перед тем, как сервер считает конфигурационный файл
+- Для каждой ли директивы в конфигурации location и server
+- Когда Nginx инициализирует основную конфигурацию
+- Когда Nginx инициализирует сервер (т.е. хост / порт) конфигурациию
+- Когда Nginx объединяет конфигурацию сервера с основной конфигурацией
+- Когда Nginx инициализирует конфигурацию location
+- Когда Nginx объединяет location конфигурацию с его конфигурацией родительского сервера
+- Когда мастер-процесс Nginx стартует
+- Когда новый worker стартует
+- Когда рабочий процесс завершается
+- Когда мастер-процесс завершает выполнение
+- Обработчики запроса
+- Фильтрация заголовки ответа
+- Фильтрация тела ответа
+- Подбор внутреннего сервера
+- Инициирование *запроса* для внутреннего сервера
+- *Пере*-инициирование *запроса* для внутреннего сервера
+- Обработка *ответа* от внутреннего сервера
+- Окончательное взаимодействие с внутренним сервером
 
 Holy mackerel! It's a bit overwhelming. You've got a lot of power at your disposal, but you can still do something useful using only a couple of these hooks and a couple of corresponding functions. Time to dive into some modules.
+Святая скумбрия! Это выглядит немного удручающим. Вы должны очень хорошо постараться, чтобы получить результат, используя только пару хуков и вызвав пару соответствующих функций.
+Ну чтож, не стоит хмуриться. Самое время, погрузиться в описание некоторых модулей.
 
-2. Components of an Nginx Module
---------------------------------
+2. Компоненты модуля Nginx
+--------------------------
 
 As I said, you have a *lot* of flexibility when it comes to making an Nginx module. This section will describe the parts that are almost always present. It's intended as a guide for understanding a module, and a reference for when you think you're ready to start writing a module.
+Как я уже сказал, Вы должны обладать хорошим кунг-фу когда дело доходит до разработке модуля Nginx. Этот раздел описывает части, которые почти всегда присутствуют. Он предназначен в качестве руководства для понимания модуля - это ссылка, для тех кто думает, что готов к написанию модуля Nginx.
 
-### 2.1. Module Configuration Struct(s)
+### 2.1. Структура конфигурации модуля)
 
-Modules can define up to three configuration structs, one for the main, server, and location contexts. Most modules just need a location configuration. The naming convention for these is `ngx_http_<module name>_(main|srv|loc)_conf_t`. Here's an example, taken from the dav module:
+Модули могут содержать до трех описаний в структуре конфигурации. В контексте: один для основного main, для сервера server и для расположения location. 
+Для большинства модулей необходимо место в конфигурации. Называться они могут как `ngx_http_<module name>_(main|srv|loc)_conf_t`. Вот пример, взятый из модуля DAV:
 
-``
-
+```c
     typedef struct {
         ngx_uint_t  methods;
         ngx_flag_t  create_full_put_path;
         ngx_uint_t  access;
     } ngx_http_dav_loc_conf_t;
+```
 
-Notice that Nginx has special data types (`ngx_uint_t` and `ngx_flag_t`); these are just aliases for the primitive data types you know and love (cf. [core/ngx\_config.h](http://lxr.evanmiller.org/http/source/core/ngx_config.h#L79) if you're curious).
+Обратите внимание, что Nginx имеет специальные типы данных (`ngx_uint_t` и `ngx_flag_t`);
+это всего лишь псевдонимы для примитивных типов данных, которые вы знаете и любите :)
+(см. [core/ngx\_config.h](http://lxr.evanmiller.org/http/source/core/ngx_config.h#L79) если Вам интересно).
 
-The elements in the configuration structs are populated by module directives.
+Эелементы структуры конфигурации наполняются директивами модуля.
 
-### 2.2. Module Directives
+### 2.2. Директивы модуля
 
-A module's directives appear in a static array of `ngx_command_t`s. Here's an example of how they're declared, taken from a small module I wrote:
+Директивы модуля доолжны быть описаны в статическом массиве `ngx_command_t`.
+Вот пример того, как это объявляется, взятые из небольшого модуля, что я написал:
 
-``
+```c
 
     static ngx_command_t  ngx_http_circle_gif_commands[] = {
         { ngx_string("circle_gif"),
@@ -197,10 +219,11 @@ A module's directives appear in a static array of `ngx_command_t`s. Here's an ex
           ...
           ngx_null_command
     };
+```
 
-And here is the declaration of `ngx_command_t` (the struct we're declaring), found in [core/ngx\_conf\_file.h](http://lxr.evanmiller.org/http/source/core/ngx_conf_file.h#L77):
+В `ngx_command_t` описываем структуру с которой будет работать модуль, смотрите [core/ngx\_conf\_file.h](http://lxr.evanmiller.org/http/source/core/ngx_conf_file.h#L77):
 
-``
+```c
 
     struct ngx_command_t {
         ngx_str_t             name;
@@ -210,10 +233,13 @@ And here is the declaration of `ngx_command_t` (the struct we're declaring), fou
         ngx_uint_t            offset;
         void                 *post;
     };
+```
 
-It seems like a bit much, but each element has a purpose.
+Кажется, что многовато, но каждый элемент имеет свою цель.
 
-The `name` is the directive string, no spaces. The data type is an `ngx_str_t`, which is usually instantiated with just (e.g.) `ngx_str("proxy_pass")`. Note: an `ngx_str_t` is a struct with a `data` element, which is a string, and a `len` element, which is the length of that string. Nginx uses this data structure most places you'd expect a string.
+Имя директивы `name` строка без пробелов - тип её данных `ngx_str_t`. Например `ngx_str("proxy_pass")`.
+Заметка: `ngx_str_t` структура  с элементами данных `data`, в виде строк, и длинной `len` этой строки. 
+Nginx использует эту структуру данных - так что в большинстве мест можно ожидать, что это именно эта строка.
 
 `type` is a set of flags that indicate where the directive is legal and how many arguments the directive takes. Applicable flags, which are bitwise-OR'd, are:
 
